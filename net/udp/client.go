@@ -1,4 +1,4 @@
-package tcp
+package udp
 
 import (
 	"errors"
@@ -10,15 +10,29 @@ import (
 	"time"
 )
 
+// 连接UDP服务器
+// serverIP-需要连接的服务器IP地址
+// serverPort-需要连接的服务器端口号
+// bReConn-是否自动重连
+func NewUdpClient(serverIP string, serverPort int, bReConn bool) (*UdpClient, error) {
+	szSvrAddr := serverIP + fmt.Sprintf(":%d", serverPort)
+	conn, err := net.DialTimeout("udp", szSvrAddr, time.Millisecond*2000)
+	if err != nil {
+		return nil, fmt.Errorf("Connect to udp server[%s] failed: %s", szSvrAddr, err.Error())
+	}
+	nu := newUdpClient(conn, bReConn)
+	return nu, nil
+}
+
 const (
 	_                  = iota
-	TCP_ERR_NONE       // 网络连接正常
-	TCP_ERR_DISCONNECT // 网络连接断开
-	TCP_ERR_CLOSE      // 网络连接关闭
+	UDP_ERR_NONE       // 网络正常
+	UDP_ERR_DISCONNECT // 网络断开
+	UDP_ERR_CLOSE      // 网络关闭
 )
 
-//TCP连接信息
-type TcpConn struct {
+//UDP连接信息
+type UdpClient struct {
 	LIP         string          // 本地IP
 	LPort       int             // 本地连接端口
 	RIP         string          // 远程IP
@@ -27,11 +41,10 @@ type TcpConn struct {
 	bReconn     bool            // 是否重连
 	cbException func(err error) // 异常回调
 	connState   int             // 网络连接状态
-	exit        chan bool       // 退出通道
+	bExit       bool            // 退出通道
 }
 
-// 新建tcp连接信息
-func newTcpConn(conn net.Conn, bReConn bool) *TcpConn {
+func newUdpClient(conn net.Conn, bReConn bool) *UdpClient {
 	if conn == nil {
 		return nil
 	}
@@ -40,43 +53,43 @@ func newTcpConn(conn net.Conn, bReConn bool) *TcpConn {
 	szLIP := szLAddr[:strings.Index(szLAddr, ":")]
 	szLPort := szLAddr[strings.Index(szLAddr, ":")+1:]
 	iLPort, _ := strconv.Atoi(szLPort)
+	szRIP := ""
+	szRPort := ""
+	iRPort := 0
+	if conn.RemoteAddr() != nil {
+		szRAddr := conn.RemoteAddr().String()
+		szRIP = szRAddr[:strings.Index(szRAddr, ":")]
+		szRPort = szRAddr[strings.Index(szRAddr, ":")+1:]
+		iRPort, _ = strconv.Atoi(szRPort)
+	}
 
-	szRAddr := conn.RemoteAddr().String()
-	szRIP := szRAddr[:strings.Index(szRAddr, ":")]
-	szRPort := szRAddr[strings.Index(szRAddr, ":")+1:]
-	iRPort, _ := strconv.Atoi(szRPort)
-
-	var pTC *TcpConn = &TcpConn{
+	var pUC *UdpClient = &UdpClient{
 		conn:        conn,
 		LIP:         szLIP,
 		LPort:       iLPort,
 		RIP:         szRIP,
 		RPort:       iRPort,
 		cbException: nil,
-		connState:   TCP_ERR_NONE,
+		connState:   UDP_ERR_NONE,
 		bReconn:     bReConn,
-		exit:        make(chan bool),
+		bExit:       false,
 	}
-	go pTC.thReConnect()
-	return pTC
+	if pUC.bReconn {
+		go pUC.thReConnect()
+	}
+	return pUC
 }
 
 // 定时检测连接正常与否
-func (self *TcpConn) thReConnect() {
+func (self *UdpClient) thReConnect() {
 	//fmt.Println("thReConnect: start!")
 	for {
-		select {
-		case v := <-self.exit:
-			if v {
-				goto goto_exit
-			}
+		if self.bExit {
 			break
-		default:
-			//fmt.Println("it's select default!")
 		}
 
 		// 网络正常
-		if self.connState == TCP_ERR_NONE {
+		if self.connState == UDP_ERR_NONE {
 			//fmt.Println("it's ok, continue thIsOk!")
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -93,13 +106,11 @@ func (self *TcpConn) thReConnect() {
 		}
 		break
 	}
-goto_exit:
-	//fmt.Println("thReConnect: exit!")
 }
 
 // 客户端连接模式下的重连
-func (self *TcpConn) reConnectForClient() error {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", self.RIP, self.RPort), 2000*time.Millisecond)
+func (self *UdpClient) reConnectForClient() error {
+	conn, err := net.DialTimeout("udp", fmt.Sprintf("%s:%d", self.RIP, self.RPort), 2000*time.Millisecond)
 	if err != nil {
 		return err
 	}
@@ -111,23 +122,23 @@ func (self *TcpConn) reConnectForClient() error {
 	self.LIP = szLIP
 	self.LPort = iLPort
 	// 修改连接状态为正常
-	self.connState = TCP_ERR_NONE
+	self.connState = UDP_ERR_NONE
 	return nil
 }
 
 // 设置连接异常时回调函数
-func (self *TcpConn) SetOnExceptionCB(cbException func(err error)) bool {
+func (self *UdpClient) SetOnExceptionCB(cbException func(err error)) bool {
 	self.cbException = cbException
 	return true
 }
 
 // 判断网络是否正常
-func (self *TcpConn) IsOK() bool {
-	return self.connState == TCP_ERR_NONE
+func (self *UdpClient) IsOK() bool {
+	return self.connState == UDP_ERR_NONE
 }
 
 // 超时读,ms-超时毫秒数
-func (self *TcpConn) ReadTimeout(byData []byte, ms int) (int, error) {
+func (self *UdpClient) ReadTimeout(byData []byte, ms int) (int, error) {
 	var err error = nil
 	timeout := time.Duration(time.Millisecond.Nanoseconds() * int64(ms))
 	if err = self.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
@@ -144,7 +155,7 @@ func (self *TcpConn) ReadTimeout(byData []byte, ms int) (int, error) {
 }
 
 // 读
-func (self *TcpConn) Read(byData []byte) (int, error) {
+func (self *UdpClient) Read(byData []byte) (int, error) {
 	if !self.IsOK() {
 		return -1, errors.New("net is not ok")
 	}
@@ -167,7 +178,7 @@ func (self *TcpConn) Read(byData []byte) (int, error) {
 			// 其他非网络错误
 			_, ok := err.(net.Error)
 			if ok == false {
-				self.connState = TCP_ERR_DISCONNECT
+				self.connState = UDP_ERR_DISCONNECT
 				// 异常回调
 				if self.cbException != nil {
 					self.cbException(err)
@@ -185,7 +196,7 @@ func (self *TcpConn) Read(byData []byte) (int, error) {
 }
 
 // 写
-func (self *TcpConn) Write(byData []byte) (int, error) {
+func (self *UdpClient) Write(byData []byte) (int, error) {
 	if !self.IsOK() {
 		return -1, errors.New("net is not ok")
 	}
@@ -197,7 +208,7 @@ func (self *TcpConn) Write(byData []byte) (int, error) {
 		index += n
 		// 写失败
 		if err != nil {
-			self.connState = TCP_ERR_DISCONNECT
+			self.connState = UDP_ERR_DISCONNECT
 			// 异常回调
 			if self.cbException != nil {
 				self.cbException(err)
@@ -209,14 +220,14 @@ func (self *TcpConn) Write(byData []byte) (int, error) {
 }
 
 // 关闭连接
-func (self *TcpConn) Close() error {
+func (self *UdpClient) Close() error {
 	self.close()
 	return nil
 }
 
-func (self *TcpConn) close() {
+func (self *UdpClient) close() {
 	// 停止检测连接状态的 goroutine
-	self.exit <- true
+	self.bExit = true
 	// 关闭连接
 	if self.IsOK() {
 		self.conn.Close()
@@ -228,7 +239,7 @@ func (self *TcpConn) close() {
 	self.RIP = ""
 	self.RPort = 0
 	// 修改连接状态为断开
-	self.connState = TCP_ERR_DISCONNECT
+	self.connState = UDP_ERR_DISCONNECT
 	// 关闭连接后禁用自动重连
 	self.bReconn = false
 }

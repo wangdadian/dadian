@@ -85,7 +85,7 @@ func (self *TcpSvrInfo) accept(errch chan error, onConnect func(*TcpConn)) error
 		}
 
 		//fmt.Printf("#### server[%s], new client: %s\n", self.addr, conn.RemoteAddr().String())
-		tc := newTcpConn(conn, true, false, self)
+		tc := newTcpConn(conn, false)
 		// 连接时回调
 		go onConnect(tc)
 	}

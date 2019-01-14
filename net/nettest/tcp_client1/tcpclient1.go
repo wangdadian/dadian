@@ -9,26 +9,18 @@ import (
 	"time"
 )
 
-func OnConnect(conn *tcp.TcpConn) {
-	fmt.Printf("OnConnect: client connect ok, time at %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	go job(conn)
-}
-
-func OnException(errType int) {
+func OnException(err error) {
 	fmt.Printf("OnException: something wrong, time at %s\n", time.Now().Format("2006-01-02 15:04:05"))
 }
 
 func main() {
-	tclient, err := tcp.NewTcpClient("192.168.1.119", 12345)
-	if err != nil {
-		fmt.Printf("main: NewTcpClient failed: %s\n", err.Error())
-		return
-	}
-	err = tclient.Connect(true, OnConnect, OnException)
+	tcpconn, err := tcp.Connect("127.0.0.1", 12345, true)
 	if err != nil {
 		fmt.Printf("main: Connect failed: %s\n", err.Error())
 		return
 	}
+	tcpconn.SetOnExceptionCB(OnException)
+	go job(tcpconn)
 	for {
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -47,9 +39,11 @@ func job(conn *tcp.TcpConn) {
 	for {
 		b, err := buffr.ReadBytes('\n')
 		if err == io.EOF {
-			break
+			file.Seek(0, 0)
+			buffr = bufio.NewReader(file)
+			continue
 		}
-		fmt.Printf("%s job: read bytes size: %d, text:\n", time.Now().Format("2006-01-02 15:04:05"), len(b))
+		// fmt.Printf("job: read bytes size: %d, text:\n", len(b))
 		s := string(b)
 		fmt.Println(s)
 		n, err := conn.Write(b)
@@ -59,14 +53,12 @@ func job(conn *tcp.TcpConn) {
 		}
 
 		fmt.Println("job: send to server, len: ", n)
-		n, err = conn.Read(rb)
-		if err != nil {
+		n, err = conn.ReadTimeout(rb, 1500)
+		if n == 0 && err != nil {
 			fmt.Printf("job: read form server failed: %s\n", err.Error())
 			break
 		}
-		fmt.Printf("%s receive message from server, size: %d, text:\n", time.Now().Format("2006-01-02 15:04:05"), n)
-		s = string(rb[:n])
-		fmt.Println(s)
+		fmt.Printf("job: read from server ok, message: %s\n", string(rb[:n]))
 		time.Sleep(500 * time.Millisecond)
 	}
 

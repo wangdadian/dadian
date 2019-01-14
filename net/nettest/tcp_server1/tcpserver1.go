@@ -14,12 +14,13 @@ func init() {
 	gIndex = 0
 }
 func OnConnectS(conn *tcp.TcpConn) {
+	conn.SetOnExceptionCB(OnExceptionS)
 	fmt.Printf("OnConnect: a new connection is ok, time at %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	gIndex++
 	go jobS(conn)
 }
 
-func OnExceptionS(errType int) {
+func OnExceptionS(err error) {
 	fmt.Printf("OnException: something wrong, time at %s\n", time.Now().Format("2006-01-02 15:04:05"))
 }
 
@@ -29,11 +30,12 @@ func main() {
 		fmt.Printf("main: NewTcpServer failed: %s\n", err.Error())
 		return
 	}
-	err = tsvr.Start(OnConnectS, OnExceptionS)
+	err = tsvr.Start(OnConnectS)
 	if err != nil {
 		fmt.Printf("main: Start failed: %s\n", err.Error())
 		return
 	}
+
 	for {
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -51,32 +53,34 @@ func jobS(conn *tcp.TcpConn) {
 	buffw := bufio.NewWriter(file)
 	b := make([]byte, 1024)
 	for {
-		n, err := conn.Read(b)
+		n, err := conn.ReadTimeout(b, 1500)
+		// n, err := conn.Read(b)
 		if err != nil {
 			fmt.Printf("job: Read failed: %s\n", err.Error())
 			break
 		}
-		fmt.Printf("%s job: receive message, size: %d, text:\n", time.Now().Format("2006-01-02 15:04:05"), n)
-		s := string(b[:n])
-		fmt.Println(s)
+		if n == 0 {
+			fmt.Println("read 0 bytes, continue reading...")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		fmt.Printf("job: receive message, size: %d, text: %s", n, string(b[:n]))
 
-		// n, err = buffw.Write(b)
-		n, err = buffw.WriteString(s)
+		n, err = buffw.WriteString(string(b[:n]))
 		if err != nil {
-			fmt.Printf("job: Write failed: %s\n", err.Error())
+			fmt.Printf("job: Write to file failed: %s\n", err.Error())
 			break
 		}
-		fmt.Printf("job: Write ok, size: %d\n", n)
 		buffw.Flush()
 
-		rets := fmt.Sprintf("[%s] server receive message, size : %d, text: \n", time.Now().Format("2006-01-02 15:04:05"), n)
+		rets := fmt.Sprintf("server receive message, size : %d", n)
 		retb := []byte(rets)
 		n, err = conn.Write(retb)
 		if err != nil {
 			fmt.Printf("job: Write failed: %s\n", err.Error())
 			break
 		}
-		fmt.Printf("%s continue waiting for Read.\n", time.Now().Format("2006-01-02 15:04:05"))
+		fmt.Printf("write to client ok, continue waiting for Read.\n")
 	}
 
 	fmt.Println("job: finish receive file, exit!")
